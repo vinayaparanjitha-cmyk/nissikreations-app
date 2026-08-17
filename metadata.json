@@ -1,0 +1,6 @@
+{
+  "name": "NISSI KREATIONS",
+  "description": "Professional printing and design business management application for NISSI KREATIONS: quotations, invoices, order tracking, payments, expenses, P&L analytics, customer CRM, and printable A4 documents.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
