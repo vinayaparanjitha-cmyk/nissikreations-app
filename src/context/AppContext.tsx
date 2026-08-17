@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import {
   ActiveTab,
@@ -14,8 +14,6 @@ import {
 } from '../types';
 import { calculateDocumentTotals, getTodayString } from '../utils/formatters';
 import { StorageService } from '../utils/storage';
-import { getSupabaseClient, isSupabaseConfigured } from '../lib/supabase';
-import { SupabaseService } from '../services/supabaseService';
 import {
   INITIAL_CUSTOMERS,
   INITIAL_EXPENSES,
@@ -38,8 +36,6 @@ interface ViewDocumentState {
   data: any;
 }
 
-export type DbStatus = 'connected' | 'connecting' | 'local_fallback' | 'error';
-
 interface AppContextType {
   // Navigation & View
   activeTab: ActiveTab;
@@ -48,16 +44,6 @@ interface AppContextType {
   // Global Search
   isSearchOpen: boolean;
   setIsSearchOpen: (open: boolean) => void;
-
-  // Database Connection & Cloud Sync
-  dbStatus: DbStatus;
-  isDbConfigured: boolean;
-  isLoadingData: boolean;
-  isSyncing: boolean;
-  lastSyncedAt: string | null;
-  syncWithDatabase: () => Promise<{ success: boolean; message: string }>;
-  testDatabaseConnection: () => Promise<{ ok: boolean; message: string; details?: any }>;
-  refreshDataFromDatabase: () => Promise<void>;
 
   // Settings
   settings: BusinessSettings;
@@ -164,7 +150,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
 
-  // Initialize with local cache for instantaneous rendering
+  // Initialize with local cache for instantaneous rendering and persistence
   const [settings, setSettings] = useState<BusinessSettings>(() => StorageService.getSettings());
   const [customers, setCustomers] = useState<Customer[]>(() => StorageService.getCustomers());
   const [quotations, setQuotations] = useState<Quotation[]>(() => StorageService.getQuotations());
@@ -173,13 +159,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [payments, setPayments] = useState<Payment[]>(() => StorageService.getPayments());
   const [expenses, setExpenses] = useState<Expense[]>(() => StorageService.getExpenses());
   const [products, setProducts] = useState<ProductService[]>(() => StorageService.getProducts());
-
-  // Database status
-  const [dbStatus, setDbStatus] = useState<DbStatus>('connecting');
-  const [isDbConfigured, setIsDbConfigured] = useState<boolean>(() => isSupabaseConfigured());
-  const [isLoadingData, setIsLoadingData] = useState<boolean>(true);
-  const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
 
   const [viewDocument, setViewDocument] = useState<ViewDocumentState>({ type: null, data: null });
   const [activeModal, setActiveModal] = useState<'none' | 'quotation' | 'invoice' | 'order' | 'payment' | 'expense' | 'customer'>('none');
@@ -200,7 +179,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const isInitialMount = useRef(true);
 
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success') => {
     const id = Math.random().toString(36).substring(2, 9);
@@ -213,131 +191,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const removeToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
-
-  // Fetch initial data from Supabase on mount
-  const refreshDataFromDatabase = useCallback(async () => {
-    const configured = isSupabaseConfigured();
-    setIsDbConfigured(configured);
-
-    if (!configured) {
-      setDbStatus('local_fallback');
-      setIsLoadingData(false);
-      return;
-    }
-
-    try {
-      setIsLoadingData(true);
-      setDbStatus('connecting');
-
-      const data = await SupabaseService.fetchAllData();
-
-      if (data) {
-        if (data.settings) {
-          setSettings(data.settings);
-          StorageService.saveSettings(data.settings);
-        }
-        setCustomers(data.customers);
-        StorageService.saveCustomers(data.customers);
-
-        setQuotations(data.quotations);
-        StorageService.saveQuotations(data.quotations);
-
-        setInvoices(data.invoices);
-        StorageService.saveInvoices(data.invoices);
-
-        setOrders(data.orders);
-        StorageService.saveOrders(data.orders);
-
-        setPayments(data.payments);
-        StorageService.savePayments(data.payments);
-
-        setExpenses(data.expenses);
-        StorageService.saveExpenses(data.expenses);
-
-        setProducts(data.products);
-        StorageService.saveProducts(data.products);
-
-        // If the database is completely brand new with 0 customers, seed initial records
-        if (data.customers.length === 0 && data.invoices.length === 0) {
-          await SupabaseService.seedIfEmpty({
-            settings,
-            customers,
-            quotations,
-            invoices,
-            orders,
-            payments,
-            expenses,
-            products,
-          });
-        }
-
-        setDbStatus('connected');
-        setLastSyncedAt(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }));
-      } else {
-        // Tables might not exist yet or connection issue
-        setDbStatus('local_fallback');
-      }
-    } catch (err: any) {
-      console.error('Failed to load from Supabase:', err);
-      setDbStatus('error');
-      showToast('Could not fetch latest cloud data. Using local cache.', 'warning');
-    } finally {
-      setIsLoadingData(false);
-    }
-  }, [customers, invoices, orders, payments, expenses, products, quotations, settings, showToast]);
-
-  // Initial load
-  useEffect(() => {
-    if (isInitialMount.current) {
-      isInitialMount.current = false;
-      refreshDataFromDatabase();
-    }
-  }, [refreshDataFromDatabase]);
-
-  // Realtime subscription to Supabase database changes
-  useEffect(() => {
-    const client = getSupabaseClient();
-    if (!client || !isSupabaseConfigured()) return;
-
-    const channel = client
-      .channel('nissi_all_tables_realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public' },
-        (payload) => {
-          console.log('Realtime change from Supabase:', payload.table, payload.eventType);
-          // Gently refresh in background
-          SupabaseService.fetchAllData().then((data) => {
-            if (data) {
-              if (data.settings) {
-                setSettings(data.settings);
-                StorageService.saveSettings(data.settings);
-              }
-              setCustomers(data.customers);
-              StorageService.saveCustomers(data.customers);
-              setQuotations(data.quotations);
-              StorageService.saveQuotations(data.quotations);
-              setInvoices(data.invoices);
-              StorageService.saveInvoices(data.invoices);
-              setOrders(data.orders);
-              StorageService.saveOrders(data.orders);
-              setPayments(data.payments);
-              StorageService.savePayments(data.payments);
-              setExpenses(data.expenses);
-              StorageService.saveExpenses(data.expenses);
-              setProducts(data.products);
-              StorageService.saveProducts(data.products);
-              setLastSyncedAt(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }));
-            }
-          });
-        }
-      )
-      .subscribe();
-
-    return () => {
-      client.removeChannel(channel);
-    };
-  }, []);
 
   // Keyboard shortcut for global search (Cmd+K / Ctrl+K)
   useEffect(() => {
@@ -396,51 +249,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setModalInitialData(null);
   };
 
-  // Sync all local records to Supabase
-  const syncWithDatabase = async (): Promise<{ success: boolean; message: string }> => {
-    setIsSyncing(true);
-    try {
-      const res = await SupabaseService.syncAllToSupabase({
-        settings,
-        customers,
-        quotations,
-        invoices,
-        orders,
-        payments,
-        expenses,
-        products,
-      });
-
-      if (res.success) {
-        setDbStatus('connected');
-        setLastSyncedAt(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }));
-        showToast(res.message, 'success');
-      } else {
-        showToast(res.message, 'error');
-      }
-      return res;
-    } catch (e: any) {
-      const msg = e.message || 'Sync failed';
-      showToast(msg, 'error');
-      return { success: false, message: msg };
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-
-  // Test Supabase connection
-  const testDatabaseConnection = async () => {
-    return await SupabaseService.testConnection();
-  };
-
   // Settings
   const updateSettings = (newSettings: Partial<BusinessSettings>) => {
     const updated = { ...settings, ...newSettings };
     setSettings(updated);
     StorageService.saveSettings(updated);
-    SupabaseService.saveSettings(updated).catch((err) => {
-      console.error('Failed to persist settings to Supabase:', err);
-    });
     showToast('Business settings updated & saved');
   };
 
@@ -455,36 +268,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newCustomer, ...customers];
     setCustomers(updated);
     StorageService.saveCustomers(updated);
-
-    // Persist immediately to Supabase
-    SupabaseService.upsertCustomer(newCustomer).then((ok) => {
-      if (!ok && isSupabaseConfigured()) {
-        showToast('Saved locally. Database sync pending.', 'warning');
-      }
-    });
-
     showToast(`Customer "${newCustomer.name}" added successfully`);
     return newCustomer;
   };
 
   const updateCustomer = (id: string, updates: Partial<Customer>) => {
-    let updatedCustomer: Customer | undefined;
     const updated = customers.map((c) => {
       if (c.id === id) {
-        updatedCustomer = { ...c, ...updates, updatedAt: new Date().toISOString() };
-        return updatedCustomer;
+        return { ...c, ...updates, updatedAt: new Date().toISOString() };
       }
       return c;
     });
     setCustomers(updated);
     StorageService.saveCustomers(updated);
-
-    if (updatedCustomer) {
-      SupabaseService.upsertCustomer(updatedCustomer).catch((err) => {
-        console.error('Failed to update customer in Supabase:', err);
-      });
-    }
-
     showToast('Customer information updated');
   };
 
@@ -501,11 +297,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = customers.filter((c) => c.id !== id);
     setCustomers(updated);
     StorageService.saveCustomers(updated);
-
-    SupabaseService.deleteCustomer(id).catch((err) => {
-      console.error('Failed to delete customer in Supabase:', err);
-    });
-
     showToast('Customer deleted');
     return true;
   };
@@ -534,22 +325,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newQuotation, ...quotations];
     setQuotations(updated);
     StorageService.saveQuotations(updated);
-
-    SupabaseService.upsertQuotation(newQuotation).catch((err) => {
-      console.error('Failed to save quotation to Supabase:', err);
-    });
-
     showToast(`Quotation ${newQuotation.quotationNumber} created`);
     return newQuotation;
   };
 
   const updateQuotation = (id: string, updates: Partial<Quotation>) => {
-    let updatedQuotation: Quotation | undefined;
     const updated = quotations.map((q) => {
       if (q.id === id) {
         const items = updates.items || q.items;
         const totals = calculateDocumentTotals(items);
-        updatedQuotation = {
+        return {
           ...q,
           ...updates,
           subtotal: totals.subtotal,
@@ -558,19 +343,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           grandTotal: totals.grandTotal,
           updatedAt: new Date().toISOString(),
         };
-        return updatedQuotation;
       }
       return q;
     });
     setQuotations(updated);
     StorageService.saveQuotations(updated);
-
-    if (updatedQuotation) {
-      SupabaseService.upsertQuotation(updatedQuotation).catch((err) => {
-        console.error('Failed to update quotation in Supabase:', err);
-      });
-    }
-
     showToast('Quotation updated successfully');
   };
 
@@ -595,11 +372,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newQuotation, ...quotations];
     setQuotations(updated);
     StorageService.saveQuotations(updated);
-
-    SupabaseService.upsertQuotation(newQuotation).catch((err) => {
-      console.error('Failed to save duplicate quotation to Supabase:', err);
-    });
-
     showToast(`Duplicated into ${newQuotation.quotationNumber}`);
     return newQuotation;
   };
@@ -608,11 +380,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = quotations.filter((q) => q.id !== id);
     setQuotations(updated);
     StorageService.saveQuotations(updated);
-
-    SupabaseService.deleteQuotation(id).catch((err) => {
-      console.error('Failed to delete quotation from Supabase:', err);
-    });
-
     showToast('Quotation removed');
   };
 
@@ -659,11 +426,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // Update quotation status
-    let updatedQtn: Quotation | undefined;
     const updatedQuotations = quotations.map((q) => {
       if (q.id === quotationId) {
-        updatedQtn = { ...q, status: 'Converted to Invoice' as const, convertedInvoiceId: newInvoice.id, updatedAt: new Date().toISOString() };
-        return updatedQtn;
+        return { ...q, status: 'Converted to Invoice' as const, convertedInvoiceId: newInvoice.id, updatedAt: new Date().toISOString() };
       }
       return q;
     });
@@ -673,10 +438,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedInvoices = [newInvoice, ...invoices];
     setInvoices(updatedInvoices);
     StorageService.saveInvoices(updatedInvoices);
-
-    // Save both to Supabase
-    if (updatedQtn) SupabaseService.upsertQuotation(updatedQtn);
-    SupabaseService.upsertInvoice(newInvoice);
 
     confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 } });
     showToast(`Converted to Invoice ${newInvoice.invoiceNumber}`);
@@ -719,17 +480,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newInvoice, ...invoices];
     setInvoices(updated);
     StorageService.saveInvoices(updated);
-
-    SupabaseService.upsertInvoice(newInvoice).catch((err) => {
-      console.error('Failed to save invoice to Supabase:', err);
-    });
-
     showToast(`Invoice ${newInvoice.invoiceNumber} created`);
     return newInvoice;
   };
 
   const updateInvoice = (id: string, updates: Partial<Invoice>) => {
-    let updatedInvoice: Invoice | undefined;
     const updated = invoices.map((inv) => {
       if (inv.id === id) {
         const items = updates.items || inv.items;
@@ -744,7 +499,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         else if (amountPaid > 0 && amountPaid < grandTotal) status = 'Partially Paid';
         else if (amountPaid === 0) status = 'Unpaid';
 
-        updatedInvoice = {
+        return {
           ...inv,
           ...updates,
           subtotal: totals.subtotal,
@@ -756,19 +511,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           status,
           updatedAt: new Date().toISOString(),
         };
-        return updatedInvoice;
       }
       return inv;
     });
     setInvoices(updated);
     StorageService.saveInvoices(updated);
-
-    if (updatedInvoice) {
-      SupabaseService.upsertInvoice(updatedInvoice).catch((err) => {
-        console.error('Failed to update invoice in Supabase:', err);
-      });
-    }
-
     showToast('Invoice updated');
   };
 
@@ -794,11 +541,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newInvoice, ...invoices];
     setInvoices(updated);
     StorageService.saveInvoices(updated);
-
-    SupabaseService.upsertInvoice(newInvoice).catch((err) => {
-      console.error('Failed to save duplicate invoice to Supabase:', err);
-    });
-
     showToast(`Duplicated to ${newInvoice.invoiceNumber}`);
     return newInvoice;
   };
@@ -810,11 +552,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = invoices.filter((i) => i.id !== id);
     setInvoices(updated);
     StorageService.saveInvoices(updated);
-
-    SupabaseService.deleteInvoice(id).catch((err) => {
-      console.error('Failed to delete invoice from Supabase:', err);
-    });
-
     showToast(`Invoice ${inv.invoiceNumber} deleted`);
     return true;
   };
@@ -845,24 +582,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newOrder, ...orders];
     setOrders(updated);
     StorageService.saveOrders(updated);
-
-    SupabaseService.upsertOrder(newOrder).catch((err) => {
-      console.error('Failed to save order to Supabase:', err);
-    });
-
     showToast(`Order ${newOrder.orderNumber} created`);
     return newOrder;
   };
 
   const updateOrder = (id: string, updates: Partial<Order>) => {
-    let updatedOrder: Order | undefined;
     const updated = orders.map((o) => {
       if (o.id === id) {
         const amount = updates.amount !== undefined ? Number(updates.amount) : o.amount;
         const advancePaid =
           updates.advancePaid !== undefined ? Number(updates.advancePaid) : o.advancePaid;
         const balance = Math.max(0, amount - advancePaid);
-        updatedOrder = {
+        return {
           ...o,
           ...updates,
           amount,
@@ -870,40 +601,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           balance,
           updatedAt: new Date().toISOString(),
         };
-        return updatedOrder;
       }
       return o;
     });
     setOrders(updated);
     StorageService.saveOrders(updated);
-
-    if (updatedOrder) {
-      SupabaseService.upsertOrder(updatedOrder).catch((err) => {
-        console.error('Failed to update order in Supabase:', err);
-      });
-    }
-
     showToast('Order details updated');
   };
 
   const updateOrderStatus = (id: string, status: OrderStatus) => {
-    let updatedOrder: Order | undefined;
     const updated = orders.map((o) => {
       if (o.id === id) {
-        updatedOrder = { ...o, status, updatedAt: new Date().toISOString() };
-        return updatedOrder;
+        return { ...o, status, updatedAt: new Date().toISOString() };
       }
       return o;
     });
     setOrders(updated);
     StorageService.saveOrders(updated);
-
-    if (updatedOrder) {
-      SupabaseService.upsertOrder(updatedOrder).catch((err) => {
-        console.error('Failed to update order status in Supabase:', err);
-      });
-    }
-
     showToast(`Order status updated to "${status}"`);
   };
 
@@ -911,11 +625,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = orders.filter((o) => o.id !== id);
     setOrders(updated);
     StorageService.saveOrders(updated);
-
-    SupabaseService.deleteOrder(id).catch((err) => {
-      console.error('Failed to delete order from Supabase:', err);
-    });
-
     showToast('Order removed');
   };
 
@@ -951,11 +660,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updatedInvoices = invoices.map((i) => (i.id === inv.id ? updatedInv : i));
       setInvoices(updatedInvoices);
       StorageService.saveInvoices(updatedInvoices);
-
-      // Persist invoice update to Supabase
-      SupabaseService.upsertInvoice(updatedInv).catch((err) => {
-        console.error('Failed to update invoice balance in Supabase:', err);
-      });
     }
 
     const newPayment: Payment = {
@@ -969,11 +673,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedPayments = [newPayment, ...payments];
     setPayments(updatedPayments);
     StorageService.savePayments(updatedPayments);
-
-    // Persist payment to Supabase
-    SupabaseService.upsertPayment(newPayment).catch((err) => {
-      console.error('Failed to save payment to Supabase:', err);
-    });
 
     confetti({ particleCount: 40, spread: 60, origin: { y: 0.7 } });
     showToast(`Payment of ₹${paymentData.amount.toLocaleString('en-IN')} recorded (${paymentNumber})`);
@@ -1004,20 +703,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updatedInvoices = invoices.map((i) => (i.id === inv.id ? updatedInv : i));
       setInvoices(updatedInvoices);
       StorageService.saveInvoices(updatedInvoices);
-
-      SupabaseService.upsertInvoice(updatedInv).catch((err) => {
-        console.error('Failed to update invoice in Supabase:', err);
-      });
     }
 
     const updated = payments.filter((p) => p.id !== id);
     setPayments(updated);
     StorageService.savePayments(updated);
-
-    SupabaseService.deletePayment(id).catch((err) => {
-      console.error('Failed to delete payment from Supabase:', err);
-    });
-
     showToast('Payment record removed');
   };
 
@@ -1031,33 +721,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newExpense, ...expenses];
     setExpenses(updated);
     StorageService.saveExpenses(updated);
-
-    SupabaseService.upsertExpense(newExpense).catch((err) => {
-      console.error('Failed to save expense to Supabase:', err);
-    });
-
     showToast(`Expense of ₹${newExpense.amount.toLocaleString('en-IN')} recorded`);
     return newExpense;
   };
 
   const updateExpense = (id: string, updates: Partial<Expense>) => {
-    let updatedExpense: Expense | undefined;
     const updated = expenses.map((e) => {
       if (e.id === id) {
-        updatedExpense = { ...e, ...updates };
-        return updatedExpense;
+        return { ...e, ...updates };
       }
       return e;
     });
     setExpenses(updated);
     StorageService.saveExpenses(updated);
-
-    if (updatedExpense) {
-      SupabaseService.upsertExpense(updatedExpense).catch((err) => {
-        console.error('Failed to update expense in Supabase:', err);
-      });
-    }
-
     showToast('Expense updated');
   };
 
@@ -1065,11 +741,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = expenses.filter((e) => e.id !== id);
     setExpenses(updated);
     StorageService.saveExpenses(updated);
-
-    SupabaseService.deleteExpense(id).catch((err) => {
-      console.error('Failed to delete expense from Supabase:', err);
-    });
-
     showToast('Expense removed');
   };
 
@@ -1082,33 +753,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [...products, newProd];
     setProducts(updated);
     StorageService.saveProducts(updated);
-
-    SupabaseService.upsertProduct(newProd).catch((err) => {
-      console.error('Failed to save product to Supabase:', err);
-    });
-
     showToast(`Product "${newProd.name}" added to catalog`);
     return newProd;
   };
 
   const updateProduct = (id: string, updates: Partial<ProductService>) => {
-    let updatedProduct: ProductService | undefined;
     const updated = products.map((p) => {
       if (p.id === id) {
-        updatedProduct = { ...p, ...updates };
-        return updatedProduct;
+        return { ...p, ...updates };
       }
       return p;
     });
     setProducts(updated);
     StorageService.saveProducts(updated);
-
-    if (updatedProduct) {
-      SupabaseService.upsertProduct(updatedProduct).catch((err) => {
-        console.error('Failed to update product in Supabase:', err);
-      });
-    }
-
     showToast('Product catalog updated');
   };
 
@@ -1116,11 +773,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = products.filter((p) => p.id !== id);
     setProducts(updated);
     StorageService.saveProducts(updated);
-
-    SupabaseService.deleteProduct(id).catch((err) => {
-      console.error('Failed to delete product from Supabase:', err);
-    });
-
     showToast('Product removed');
   };
 
@@ -1140,39 +792,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const importData = (jsonStr: string): boolean => {
     const success = StorageService.importAllData(jsonStr);
     if (success) {
-      const s = StorageService.getSettings();
-      const c = StorageService.getCustomers();
-      const q = StorageService.getQuotations();
-      const i = StorageService.getInvoices();
-      const o = StorageService.getOrders();
-      const p = StorageService.getPayments();
-      const e = StorageService.getExpenses();
-      const pr = StorageService.getProducts();
-
-      setSettings(s);
-      setCustomers(c);
-      setQuotations(q);
-      setInvoices(i);
-      setOrders(o);
-      setPayments(p);
-      setExpenses(e);
-      setProducts(pr);
-
-      // Sync imported dataset to Supabase
-      if (isSupabaseConfigured()) {
-        SupabaseService.syncAllToSupabase({
-          settings: s,
-          customers: c,
-          quotations: q,
-          invoices: i,
-          orders: o,
-          payments: p,
-          expenses: e,
-          products: pr,
-        });
-      }
-
-      showToast('All business records restored & persisted successfully');
+      setSettings(StorageService.getSettings());
+      setCustomers(StorageService.getCustomers());
+      setQuotations(StorageService.getQuotations());
+      setInvoices(StorageService.getInvoices());
+      setOrders(StorageService.getOrders());
+      setPayments(StorageService.getPayments());
+      setExpenses(StorageService.getExpenses());
+      setProducts(StorageService.getProducts());
+      showToast('All business records restored successfully');
       return true;
     }
     showToast('Invalid backup file format', 'error');
@@ -1189,20 +817,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPayments(INITIAL_PAYMENTS);
     setExpenses(INITIAL_EXPENSES);
     setProducts(INITIAL_PRODUCTS);
-
-    if (isSupabaseConfigured()) {
-      SupabaseService.syncAllToSupabase({
-        settings: INITIAL_SETTINGS,
-        customers: INITIAL_CUSTOMERS,
-        quotations: INITIAL_QUOTATIONS,
-        invoices: INITIAL_INVOICES,
-        orders: INITIAL_ORDERS,
-        payments: INITIAL_PAYMENTS,
-        expenses: INITIAL_EXPENSES,
-        products: INITIAL_PRODUCTS,
-      });
-    }
-
     showToast('Reset to demo business data');
   };
 
@@ -1213,14 +827,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveTab,
         isSearchOpen,
         setIsSearchOpen,
-        dbStatus,
-        isDbConfigured,
-        isLoadingData,
-        isSyncing,
-        lastSyncedAt,
-        syncWithDatabase,
-        testDatabaseConnection,
-        refreshDataFromDatabase,
         settings,
         updateSettings,
         customers,

@@ -15,7 +15,6 @@ import {
   Upload,
 } from 'lucide-react';
 import { Logo } from '../components/Logo';
-import { SupabaseSettingsCard } from '../components/SupabaseSettingsCard';
 import { useApp } from '../context/AppContext';
 import { AppSettings } from '../types';
 import { StorageService } from '../utils/storage';
@@ -155,9 +154,6 @@ export const SettingsView: React.FC = () => {
           <span>{isSaved ? 'Changes Saved!' : 'Save All Settings'}</span>
         </button>
       </div>
-
-      {/* Supabase PostgreSQL Database & Realtime Cloud Persist Card */}
-      <SupabaseSettingsCard />
 
       <form onSubmit={handleSave} className="space-y-6 text-xs">
         {/* Brand & Logo Section */}
