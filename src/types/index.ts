@@ -22,6 +22,7 @@ export interface DocumentItem {
 export interface Customer {
   id: string;
   name: string;
+  companyName?: string;
   phone: string;
   email: string;
   address: string;

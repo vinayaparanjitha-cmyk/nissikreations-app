@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   ChevronDown,
   CreditCard,
+  Database,
   FileSpreadsheet,
   FileText,
   Menu,
@@ -19,7 +20,7 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
-  const { setIsSearchOpen, openModal, settings } = useApp();
+  const { setIsSearchOpen, openModal, settings, dbStatus, setActiveTab } = useApp();
   const [isQuickActionsOpen, setIsQuickActionsOpen] = useState(false);
 
   return (
@@ -56,8 +57,36 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileMenu }) => {
           </button>
         </div>
 
-        {/* Right Side: Quick Action Button & Search icon on mobile */}
+        {/* Right Side: Quick Action Button, DB Status & Search icon on mobile */}
         <div className="flex items-center gap-2.5">
+          <button
+            onClick={() => setActiveTab('settings')}
+            title="Database Connection & Persistence Settings"
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer bg-white border-[#E0DDD3] hover:border-stone-400 text-stone-700"
+          >
+            <Database className="w-3.5 h-3.5 text-stone-500" />
+            <span
+              className={`w-2 h-2 rounded-full ${
+                dbStatus === 'connected'
+                  ? 'bg-emerald-500'
+                  : dbStatus === 'connecting'
+                  ? 'bg-amber-500 animate-pulse'
+                  : dbStatus === 'error'
+                  ? 'bg-rose-500'
+                  : 'bg-sky-500'
+              }`}
+            />
+            <span className="hidden md:inline text-stone-600">
+              {dbStatus === 'connected'
+                ? 'DB Connected'
+                : dbStatus === 'connecting'
+                ? 'Connecting...'
+                : dbStatus === 'error'
+                ? 'DB Error'
+                : 'Cloud Persist'}
+            </span>
+          </button>
+
           <button
             onClick={() => setIsSearchOpen(true)}
             className="sm:hidden p-2 text-stone-600 hover:bg-[#EFECE6] rounded-lg cursor-pointer"
