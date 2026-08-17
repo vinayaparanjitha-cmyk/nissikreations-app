@@ -24,6 +24,7 @@ import {
   INITIAL_QUOTATIONS,
   INITIAL_SETTINGS,
 } from '../utils/initialData';
+import { SupabaseDB, isSupabaseConfigured } from '../utils/supabase';
 
 interface Toast {
   id: string;
@@ -44,6 +45,10 @@ interface AppContextType {
   // Global Search
   isSearchOpen: boolean;
   setIsSearchOpen: (open: boolean) => void;
+
+  // Cloud Persistence Status
+  isCloudConnected: boolean;
+  isLoadingCloud: boolean;
 
   // Settings
   settings: BusinessSettings;
@@ -150,7 +155,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
   const [isSearchOpen, setIsSearchOpen] = useState<boolean>(false);
 
-  // Initialize with local cache for instantaneous rendering and persistence
+  // Persistence State
+  const [isCloudConnected, setIsCloudConnected] = useState<boolean>(isSupabaseConfigured);
+  const [isLoadingCloud, setIsLoadingCloud] = useState<boolean>(false);
+
+  // Initialize with local cache for instantaneous rendering and offline support
   const [settings, setSettings] = useState<BusinessSettings>(() => StorageService.getSettings());
   const [customers, setCustomers] = useState<Customer[]>(() => StorageService.getCustomers());
   const [quotations, setQuotations] = useState<Quotation[]>(() => StorageService.getQuotations());
@@ -191,6 +200,84 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const removeToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
+
+  // Automatic Supabase Cloud Loading when App Starts
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+
+    let isMounted = true;
+    async function loadCloudData() {
+      setIsLoadingCloud(true);
+      try {
+        const [
+          cloudSettings,
+          cloudCustomers,
+          cloudQuotations,
+          cloudInvoices,
+          cloudOrders,
+          cloudPayments,
+          cloudExpenses,
+          cloudProducts,
+        ] = await Promise.all([
+          SupabaseDB.fetchSettings(),
+          SupabaseDB.fetchCustomers(),
+          SupabaseDB.fetchQuotations(),
+          SupabaseDB.fetchInvoices(),
+          SupabaseDB.fetchOrders(),
+          SupabaseDB.fetchPayments(),
+          SupabaseDB.fetchExpenses(),
+          SupabaseDB.fetchProducts(),
+        ]);
+
+        if (!isMounted) return;
+
+        // If cloud has data, update state and local cache
+        if (cloudSettings) {
+          setSettings(cloudSettings);
+          StorageService.saveSettings(cloudSettings);
+        }
+        if (cloudCustomers !== null) {
+          setCustomers(cloudCustomers);
+          StorageService.saveCustomers(cloudCustomers);
+        }
+        if (cloudQuotations !== null) {
+          setQuotations(cloudQuotations);
+          StorageService.saveQuotations(cloudQuotations);
+        }
+        if (cloudInvoices !== null) {
+          setInvoices(cloudInvoices);
+          StorageService.saveInvoices(cloudInvoices);
+        }
+        if (cloudOrders !== null) {
+          setOrders(cloudOrders);
+          StorageService.saveOrders(cloudOrders);
+        }
+        if (cloudPayments !== null) {
+          setPayments(cloudPayments);
+          StorageService.savePayments(cloudPayments);
+        }
+        if (cloudExpenses !== null) {
+          setExpenses(cloudExpenses);
+          StorageService.saveExpenses(cloudExpenses);
+        }
+        if (cloudProducts !== null) {
+          setProducts(cloudProducts);
+          StorageService.saveProducts(cloudProducts);
+        }
+
+        setIsCloudConnected(true);
+      } catch (err) {
+        console.warn('Could not load Supabase cloud data:', err);
+      } finally {
+        if (isMounted) setIsLoadingCloud(false);
+      }
+    }
+
+    loadCloudData();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Keyboard shortcut for global search (Cmd+K / Ctrl+K)
   useEffect(() => {
@@ -254,6 +341,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = { ...settings, ...newSettings };
     setSettings(updated);
     StorageService.saveSettings(updated);
+    SupabaseDB.saveSettings(updated);
     showToast('Business settings updated & saved');
   };
 
@@ -268,6 +356,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newCustomer, ...customers];
     setCustomers(updated);
     StorageService.saveCustomers(updated);
+    SupabaseDB.saveCustomers(updated);
     showToast(`Customer "${newCustomer.name}" added successfully`);
     return newCustomer;
   };
@@ -281,6 +370,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setCustomers(updated);
     StorageService.saveCustomers(updated);
+    SupabaseDB.saveCustomers(updated);
     showToast('Customer information updated');
   };
 
@@ -297,6 +387,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = customers.filter((c) => c.id !== id);
     setCustomers(updated);
     StorageService.saveCustomers(updated);
+    SupabaseDB.deleteCustomer(id);
     showToast('Customer deleted');
     return true;
   };
@@ -325,6 +416,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newQuotation, ...quotations];
     setQuotations(updated);
     StorageService.saveQuotations(updated);
+    SupabaseDB.saveQuotations(updated);
     showToast(`Quotation ${newQuotation.quotationNumber} created`);
     return newQuotation;
   };
@@ -348,6 +440,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setQuotations(updated);
     StorageService.saveQuotations(updated);
+    SupabaseDB.saveQuotations(updated);
     showToast('Quotation updated successfully');
   };
 
@@ -372,6 +465,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newQuotation, ...quotations];
     setQuotations(updated);
     StorageService.saveQuotations(updated);
+    SupabaseDB.saveQuotations(updated);
     showToast(`Duplicated into ${newQuotation.quotationNumber}`);
     return newQuotation;
   };
@@ -380,6 +474,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = quotations.filter((q) => q.id !== id);
     setQuotations(updated);
     StorageService.saveQuotations(updated);
+    SupabaseDB.deleteQuotation(id);
     showToast('Quotation removed');
   };
 
@@ -434,10 +529,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setQuotations(updatedQuotations);
     StorageService.saveQuotations(updatedQuotations);
+    SupabaseDB.saveQuotations(updatedQuotations);
 
     const updatedInvoices = [newInvoice, ...invoices];
     setInvoices(updatedInvoices);
     StorageService.saveInvoices(updatedInvoices);
+    SupabaseDB.saveInvoices(updatedInvoices);
 
     confetti({ particleCount: 60, spread: 70, origin: { y: 0.6 } });
     showToast(`Converted to Invoice ${newInvoice.invoiceNumber}`);
@@ -480,6 +577,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newInvoice, ...invoices];
     setInvoices(updated);
     StorageService.saveInvoices(updated);
+    SupabaseDB.saveInvoices(updated);
     showToast(`Invoice ${newInvoice.invoiceNumber} created`);
     return newInvoice;
   };
@@ -516,6 +614,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setInvoices(updated);
     StorageService.saveInvoices(updated);
+    SupabaseDB.saveInvoices(updated);
     showToast('Invoice updated');
   };
 
@@ -541,6 +640,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newInvoice, ...invoices];
     setInvoices(updated);
     StorageService.saveInvoices(updated);
+    SupabaseDB.saveInvoices(updated);
     showToast(`Duplicated to ${newInvoice.invoiceNumber}`);
     return newInvoice;
   };
@@ -552,6 +652,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = invoices.filter((i) => i.id !== id);
     setInvoices(updated);
     StorageService.saveInvoices(updated);
+    SupabaseDB.deleteInvoice(id);
     showToast(`Invoice ${inv.invoiceNumber} deleted`);
     return true;
   };
@@ -582,6 +683,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newOrder, ...orders];
     setOrders(updated);
     StorageService.saveOrders(updated);
+    SupabaseDB.saveOrders(updated);
     showToast(`Order ${newOrder.orderNumber} created`);
     return newOrder;
   };
@@ -606,6 +708,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setOrders(updated);
     StorageService.saveOrders(updated);
+    SupabaseDB.saveOrders(updated);
     showToast('Order details updated');
   };
 
@@ -618,6 +721,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setOrders(updated);
     StorageService.saveOrders(updated);
+    SupabaseDB.saveOrders(updated);
     showToast(`Order status updated to "${status}"`);
   };
 
@@ -625,6 +729,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = orders.filter((o) => o.id !== id);
     setOrders(updated);
     StorageService.saveOrders(updated);
+    SupabaseDB.deleteOrder(id);
     showToast('Order removed');
   };
 
@@ -660,6 +765,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updatedInvoices = invoices.map((i) => (i.id === inv.id ? updatedInv : i));
       setInvoices(updatedInvoices);
       StorageService.saveInvoices(updatedInvoices);
+      SupabaseDB.saveInvoices(updatedInvoices);
     }
 
     const newPayment: Payment = {
@@ -673,6 +779,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updatedPayments = [newPayment, ...payments];
     setPayments(updatedPayments);
     StorageService.savePayments(updatedPayments);
+    SupabaseDB.savePayments(updatedPayments);
 
     confetti({ particleCount: 40, spread: 60, origin: { y: 0.7 } });
     showToast(`Payment of ₹${paymentData.amount.toLocaleString('en-IN')} recorded (${paymentNumber})`);
@@ -703,11 +810,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updatedInvoices = invoices.map((i) => (i.id === inv.id ? updatedInv : i));
       setInvoices(updatedInvoices);
       StorageService.saveInvoices(updatedInvoices);
+      SupabaseDB.saveInvoices(updatedInvoices);
     }
 
     const updated = payments.filter((p) => p.id !== id);
     setPayments(updated);
     StorageService.savePayments(updated);
+    SupabaseDB.deletePayment(id);
     showToast('Payment record removed');
   };
 
@@ -721,6 +830,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [newExpense, ...expenses];
     setExpenses(updated);
     StorageService.saveExpenses(updated);
+    SupabaseDB.saveExpenses(updated);
     showToast(`Expense of ₹${newExpense.amount.toLocaleString('en-IN')} recorded`);
     return newExpense;
   };
@@ -734,6 +844,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setExpenses(updated);
     StorageService.saveExpenses(updated);
+    SupabaseDB.saveExpenses(updated);
     showToast('Expense updated');
   };
 
@@ -741,6 +852,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = expenses.filter((e) => e.id !== id);
     setExpenses(updated);
     StorageService.saveExpenses(updated);
+    SupabaseDB.deleteExpense(id);
     showToast('Expense removed');
   };
 
@@ -753,6 +865,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = [...products, newProd];
     setProducts(updated);
     StorageService.saveProducts(updated);
+    SupabaseDB.saveProducts(updated);
     showToast(`Product "${newProd.name}" added to catalog`);
     return newProd;
   };
@@ -766,6 +879,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
     setProducts(updated);
     StorageService.saveProducts(updated);
+    SupabaseDB.saveProducts(updated);
     showToast('Product catalog updated');
   };
 
@@ -773,6 +887,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const updated = products.filter((p) => p.id !== id);
     setProducts(updated);
     StorageService.saveProducts(updated);
+    SupabaseDB.deleteProduct(id);
     showToast('Product removed');
   };
 
@@ -792,14 +907,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const importData = (jsonStr: string): boolean => {
     const success = StorageService.importAllData(jsonStr);
     if (success) {
-      setSettings(StorageService.getSettings());
-      setCustomers(StorageService.getCustomers());
-      setQuotations(StorageService.getQuotations());
-      setInvoices(StorageService.getInvoices());
-      setOrders(StorageService.getOrders());
-      setPayments(StorageService.getPayments());
-      setExpenses(StorageService.getExpenses());
-      setProducts(StorageService.getProducts());
+      const s = StorageService.getSettings();
+      const c = StorageService.getCustomers();
+      const q = StorageService.getQuotations();
+      const i = StorageService.getInvoices();
+      const o = StorageService.getOrders();
+      const p = StorageService.getPayments();
+      const e = StorageService.getExpenses();
+      const pr = StorageService.getProducts();
+
+      setSettings(s);
+      setCustomers(c);
+      setQuotations(q);
+      setInvoices(i);
+      setOrders(o);
+      setPayments(p);
+      setExpenses(e);
+      setProducts(pr);
+
+      // Also push to Supabase if configured
+      SupabaseDB.syncAllToCloud({
+        settings: s,
+        customers: c,
+        quotations: q,
+        invoices: i,
+        orders: o,
+        payments: p,
+        expenses: e,
+        products: pr,
+      });
+
       showToast('All business records restored successfully');
       return true;
     }
@@ -817,6 +954,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setPayments(INITIAL_PAYMENTS);
     setExpenses(INITIAL_EXPENSES);
     setProducts(INITIAL_PRODUCTS);
+
+    SupabaseDB.syncAllToCloud({
+      settings: INITIAL_SETTINGS,
+      customers: INITIAL_CUSTOMERS,
+      quotations: INITIAL_QUOTATIONS,
+      invoices: INITIAL_INVOICES,
+      orders: INITIAL_ORDERS,
+      payments: INITIAL_PAYMENTS,
+      expenses: INITIAL_EXPENSES,
+      products: INITIAL_PRODUCTS,
+    });
+
     showToast('Reset to demo business data');
   };
 
@@ -827,6 +976,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveTab,
         isSearchOpen,
         setIsSearchOpen,
+        isCloudConnected,
+        isLoadingCloud,
         settings,
         updateSettings,
         customers,
